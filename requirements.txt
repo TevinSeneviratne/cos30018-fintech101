@@ -1,0 +1,15 @@
+numpy
+pandas
+matplotlib
+scikit-learn
+pandas-datareader
+yfinance
+
+# Windows/Linux (or any non-Apple-Silicon): use standard TensorFlow
+tensorflow; platform_system != "Darwin" or platform_machine != "arm64"
+
+# Apple Silicon (M1/M2/M3 on macOS): use Metal-accelerated TensorFlow
+tensorflow-macos; platform_system == "Darwin" and platform_machine == "arm64"
+tensorflow-metal; platform_system == "Darwin" and platform_machine == "arm64"
+yahoo_fin
+requests_html

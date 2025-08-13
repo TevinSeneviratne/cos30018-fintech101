@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# Training artifacts (large / reproducible)
+logs/
+data/
+
+# Model weights (large)
+*.h5
+*.weights.h5
+
+# macOS
+.DS_Store
