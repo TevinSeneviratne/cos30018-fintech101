@@ -23,9 +23,14 @@ import pandas_datareader as web
 import datetime as dt
 import tensorflow as tf
 
+
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, LSTM, InputLayer
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+# NEW: our helper for robust loading
+from data_utils import load_and_process_data
 
 #------------------------------------------------------------------------------
 # Load Data
@@ -37,16 +42,16 @@ from tensorflow.keras.layers import Dense, Dropout, LSTM, InputLayer
 # DATA_SOURCE = "yahoo"
 COMPANY = 'CBA.AX'
 
-TRAIN_START = '2020-01-01'     # Start date to read
+TRAIN_START = '2015-01-01'     # Start date to read
 TRAIN_END = '2023-08-01'       # End date to read
 
 # data = web.DataReader(COMPANY, DATA_SOURCE, TRAIN_START, TRAIN_END) # Read data using yahoo
 
-
 import yfinance as yf
 
 # Get the data for the stock AAPL
-data = yf.download(COMPANY,TRAIN_START,TRAIN_END)
+# (kept here to preserve original comments; not used by the new loader)
+data = yf.download(COMPANY, TRAIN_START, TRAIN_END)
 
 #------------------------------------------------------------------------------
 # Prepare Data
@@ -57,48 +62,31 @@ data = yf.download(COMPANY,TRAIN_START,TRAIN_END)
 # 2) Use a different price value eg. mid-point of Open & Close
 # 3) Change the Prediction days
 #------------------------------------------------------------------------------
-PRICE_VALUE = "Close"
+# === New, robust multi-feature loader (replaces the old single-column code) ===
+FEATURE_COLUMNS = ["adjclose", "volume", "open", "high", "low"]
+PREDICTION_DAYS = 60      # window length (a.k.a. n_steps)
+LOOKUP_STEP = 1           # next-day horizon
 
-scaler = MinMaxScaler(feature_range=(0, 1)) 
-# Note that, by default, feature_range=(0, 1). Thus, if you want a different 
-# feature_range (min,max) then you'll need to specify it here
-scaled_data = scaler.fit_transform(data[PRICE_VALUE].values.reshape(-1, 1)) 
-# Flatten and normalise the data
-# First, we reshape a 1D array(n) to 2D array(n,1)
-# We have to do that because sklearn.preprocessing.fit_transform()
-# requires a 2D array
-# Here n == len(scaled_data)
-# Then, we scale the whole array to the range (0,1)
-# The parameter -1 allows (np.)reshape to figure out the array size n automatically 
-# values.reshape(-1, 1) 
-# https://stackoverflow.com/questions/18691084/what-does-1-mean-in-numpy-reshape'
-# When reshaping an array, the new shape must contain the same number of elements 
-# as the old shape, meaning the products of the two shapes' dimensions must be equal. 
-# When using a -1, the dimension corresponding to the -1 will be the product of 
-# the dimensions of the original array divided by the product of the dimensions 
-# given to reshape so as to maintain the same number of elements.
+bundle = load_and_process_data(
+    ticker=COMPANY,
+    start_date=TRAIN_START,
+    end_date=TRAIN_END,
+    feature_columns=FEATURE_COLUMNS,
+    n_steps=PREDICTION_DAYS,
+    lookup_step=LOOKUP_STEP,
+    scale=True,
+    split_by_date=True,       # set False for random split
+    test_size=0.2,
+    shuffle=True,
+    nan_mode="ffill_bfill",
+    cache_dir="cache",        # set None to disable caching
+    force_refresh=False,
+    auto_adjust=True,         # Close is already adjusted; 'Adj Close' may be absent
+)
 
-# Number of days to look back to base the prediction
-PREDICTION_DAYS = 60 # Original
-
-# To store the training data
-x_train = []
-y_train = []
-
-scaled_data = scaled_data[:,0] # Turn the 2D array back to a 1D array
-# Prepare the data
-for x in range(PREDICTION_DAYS, len(scaled_data)):
-    x_train.append(scaled_data[x-PREDICTION_DAYS:x])
-    y_train.append(scaled_data[x])
-
-# Convert them into an array
-x_train, y_train = np.array(x_train), np.array(y_train)
-# Now, x_train is a 2D array(p,q) where p = len(scaled_data) - PREDICTION_DAYS
-# and q = PREDICTION_DAYS; while y_train is a 1D array(p)
-
-x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
-# We now reshape x_train into a 3D array(p, q, 1); Note that x_train 
-# is an array of p inputs with each input being a 2D array 
+# Use arrays v0.1 expects
+x_train, y_train = bundle.X_train, bundle.y_train
+x_test,  y_test  = bundle.X_test,  bundle.y_test
 
 #------------------------------------------------------------------------------
 # Build the Model
@@ -112,7 +100,15 @@ model = Sequential() # Basic neural network
 # See: https://www.tensorflow.org/api_docs/python/tf/keras/Sequential
 # for some useful examples
 
-model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+# IMPORTANT CHANGE: input is now (PREDICTION_DAYS, number_of_features)
+model.add(
+    LSTM(
+        units=50,
+        return_sequences=True,
+        input_shape=(x_train.shape[1], x_train.shape[2])  # (timesteps, features)
+    )
+)
+
 # This is our first hidden layer which also spcifies an input layer. 
 # That's why we specify the input shape for this layer; 
 # i.e. the format of each training example
@@ -144,7 +140,7 @@ model.add(LSTM(units=50))
 model.add(Dropout(0.2))
 
 model.add(Dense(units=1)) 
-# Prediction of the next closing value of the stock price
+# Prediction of the next closing value of the stock price (adjclose)
 
 # We compile the model by specify the parameters for the model
 # See lecture Week 6 (COS30018)
@@ -183,59 +179,29 @@ model.fit(x_train, y_train, epochs=25, batch_size=32)
 #------------------------------------------------------------------------------
 # Test the model accuracy on existing data
 #------------------------------------------------------------------------------
-# Load the test data
-TEST_START = '2023-08-02'
-TEST_END = '2024-07-02'
+# We already created x_test / y_test in the loader, so we can predict directly.
+predicted_scaled = model.predict(x_test)
 
-# test_data = web.DataReader(COMPANY, DATA_SOURCE, TEST_START, TEST_END)
+# Inverse-scale predicted and true values using the 'adjclose' scaler if we scaled
+if "adjclose" in bundle.column_scaler:
+    scaler = bundle.column_scaler["adjclose"]
+    predicted_prices = scaler.inverse_transform(predicted_scaled)
+    actual_prices = scaler.inverse_transform(y_test.reshape(-1, 1)).ravel()
+else:
+    predicted_prices = predicted_scaled
+    actual_prices = y_test
 
-test_data = yf.download(COMPANY,TEST_START,TEST_END)
+actual = actual_prices.astype(float)
+pred   = predicted_prices.ravel().astype(float)
 
+mae  = mean_absolute_error(actual, pred)
+rmse = np.sqrt(mean_squared_error(actual, pred))
+mape = np.mean(np.abs((actual - pred) / actual)) * 100
 
-# The above bug is the reason for the following line of code
-# test_data = test_data[1:]
+print(f"Test MAE:  {mae:.4f}")
+print(f"Test RMSE: {rmse:.4f}")
+print(f"Test MAPE: {mape:.2f}%")
 
-actual_prices = test_data[PRICE_VALUE].values
-
-total_dataset = pd.concat((data[PRICE_VALUE], test_data[PRICE_VALUE]), axis=0)
-
-model_inputs = total_dataset[len(total_dataset) - len(test_data) - PREDICTION_DAYS:].values
-# We need to do the above because to predict the closing price of the fisrt
-# PREDICTION_DAYS of the test period [TEST_START, TEST_END], we'll need the 
-# data from the training period
-
-model_inputs = model_inputs.reshape(-1, 1)
-# TO DO: Explain the above line
-
-model_inputs = scaler.transform(model_inputs)
-# We again normalize our closing price data to fit them into the range (0,1)
-# using the same scaler used above 
-# However, there may be a problem: scaler was computed on the basis of
-# the Max/Min of the stock price for the period [TRAIN_START, TRAIN_END],
-# but there may be a lower/higher price during the test period 
-# [TEST_START, TEST_END]. That can lead to out-of-bound values (negative and
-# greater than one)
-# We'll call this ISSUE #2
-
-# TO DO: Generally, there is a better way to process the data so that we 
-# can use part of it for training and the rest for testing. You need to 
-# implement such a way
-
-#------------------------------------------------------------------------------
-# Make predictions on test data
-#------------------------------------------------------------------------------
-x_test = []
-for x in range(PREDICTION_DAYS, len(model_inputs)):
-    x_test.append(model_inputs[x - PREDICTION_DAYS:x, 0])
-
-x_test = np.array(x_test)
-x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
-# TO DO: Explain the above 5 lines
-
-predicted_prices = model.predict(x_test)
-predicted_prices = scaler.inverse_transform(predicted_prices)
-# Clearly, as we transform our data into the normalized range (0,1),
-# we now need to reverse this transformation 
 #------------------------------------------------------------------------------
 # Plot the test predictions
 ## To do:
@@ -243,7 +209,6 @@ predicted_prices = scaler.inverse_transform(predicted_prices)
 # 2) Chart showing High & Lows of the day
 # 3) Show chart of next few days (predicted)
 #------------------------------------------------------------------------------
-
 plt.plot(actual_prices, color="black", label=f"Actual {COMPANY} Price")
 plt.plot(predicted_prices, color="green", label=f"Predicted {COMPANY} Price")
 plt.title(f"{COMPANY} Share Price")
@@ -255,15 +220,18 @@ plt.show()
 #------------------------------------------------------------------------------
 # Predict next day
 #------------------------------------------------------------------------------
+# Use the last sequence prepared by the loader to predict the next price
+last_seq = bundle.last_sequence[-bundle.n_steps:]  # last n_steps rows
+last_seq = np.expand_dims(last_seq, axis=0)        # (1, n_steps, n_features)
+next_scaled = model.predict(last_seq)
 
+if "adjclose" in bundle.column_scaler:
+    next_price = bundle.column_scaler["adjclose"].inverse_transform(next_scaled)[0, 0]
+else:
+    next_price = float(next_scaled[0, 0])
 
-real_data = [model_inputs[len(model_inputs) - PREDICTION_DAYS:, 0]]
-real_data = np.array(real_data)
-real_data = np.reshape(real_data, (real_data.shape[0], real_data.shape[1], 1))
+print(f"Prediction: {next_price}")
 
-prediction = model.predict(real_data)
-prediction = scaler.inverse_transform(prediction)
-print(f"Prediction: {prediction}")
 
 # A few concluding remarks here:
 # 1. The predictor is quite bad, especially if you look at the next day 
