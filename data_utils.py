@@ -59,18 +59,33 @@ def _safe_cache_name(ticker: str, start: str, end: str, auto_adjust: bool) -> st
 def _read_cache(cache_path: str) -> pd.DataFrame:
     """
     Be tolerant reading old/new cache formats:
-    - Preferred: a 'Date' column (used as index).
-    - Fallback: first column is the date index (no header).
+    - Two-row headers from yfinance (MultiIndex) -> flatten them.
+    - Single-row headers with 'Date' as the first column -> use it as index.
+    - If the index can't be parsed to datetime, coerce and drop bad rows.
     """
     try:
-        df = pd.read_csv(cache_path, parse_dates=["Date"], index_col="Date")
+        # Try reading a 2-row header first (yfinance multiindex CSV)
+        df = pd.read_csv(cache_path, header=[0, 1], index_col=0)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [
+                "_".join(
+                    str(x).strip().lower().replace(" ", "_")
+                    for x in tup if x and str(x).lower() != "nan"
+                )
+                for tup in df.columns
+            ]
     except Exception:
-        df = pd.read_csv(cache_path, parse_dates=True, index_col=0)
-        if df.index.name is None:
-            df.index.name = "Date"
-    df.index = pd.to_datetime(df.index)
+        try:
+            df = pd.read_csv(cache_path, parse_dates=["Date"], index_col="Date")
+        except Exception:
+            df = pd.read_csv(cache_path, parse_dates=True, index_col=0)
+
+    # Ensure datetime index; drop anything unparsable (e.g., stray 'Ticker' strings)
+    df.index = pd.to_datetime(df.index, errors="coerce")
+    df = df[~df.index.isna()]
     df.index.name = "Date"
     return df
+
 
 
 def _download_yf(ticker: str, start: Optional[str], end: Optional[str], auto_adjust: bool) -> pd.DataFrame:
@@ -83,61 +98,93 @@ def _download_yf(ticker: str, start: Optional[str], end: Optional[str], auto_adj
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Standardize to lowercase with underscores and ensure we have plain, unsuffixed
-    columns for: open, high, low, close, adjclose, volume.
+    Normalize OHLCV columns to a clean lower-case schema:
+    ['open','high','low','close','adjclose','volume'].
 
-    yfinance can return MultiIndex columns like ('Close','CBA.AX'), which we flatten
-    to 'close_cba.ax'. Here we "lift" those back to 'close' (and similarly for the
-    other bases). If 'Adj Close' is missing (common with auto_adjust=True), we treat
-    'close' as 'adjclose'.
+    Robust to:
+      - MultiIndex columns
+      - suffixed / polluted headers like 'close_cba.ax_51.98'
+      - 'Adj Close' / 'AdjClose' / 'Close' variants
     """
     out = df.copy()
 
-    # Flatten MultiIndex columns if any, then normalize case/spacing
+    # 1) Ensure DateTime index
+    if not isinstance(out.index, pd.DatetimeIndex):
+        try:
+            out.index = pd.to_datetime(out.index)
+        except Exception:
+            pass
+
+    # 2) If MultiIndex cols -> flatten
     if isinstance(out.columns, pd.MultiIndex):
-        out.columns = [
-            "_".join([str(x).strip().lower().replace(" ", "_") for x in col if x is not None])
-            for col in out.columns
-        ]
-    else:
-        out.columns = [str(c).strip().lower().replace(" ", "_") for c in out.columns]
+        out.columns = ["_".join([str(x) for x in tup if x is not None]).strip()
+                       for tup in out.columns]
 
-    # Unify common variants (handle tokens appearing anywhere in the name)
-    def _normalize_name(c: str) -> str:
-        c = c.replace("adj_close", "adjclose")
-        c = c.replace("close_price", "close")
-        return c
-    out.columns = [_normalize_name(c) for c in out.columns]
+    # 3) Lowercase stringified names
+    cols_lower = [str(c).strip().lower() for c in out.columns]
 
-    # Lift suffixed per-ticker columns back to base names
-    bases = ["open", "high", "low", "close", "adjclose", "volume"]
-    for base in bases:
-        if base not in out.columns:
-            # Look for 'base_*' (e.g., 'close_cba.ax')
-            candidates = [c for c in out.columns if c.startswith(base + "_")]
-            if not candidates:
-                # very defensive: also allow '*_base' (rare)
-                candidates = [c for c in out.columns if c.endswith("_" + base)]
-            if candidates:
-                out[base] = out[candidates[0]]
+    # 4) Map anything that *contains* these keys to the canonical base name
+    def base_of(name: str) -> str | None:
+        name = name.replace("adj close", "adjclose")  # unify wording
+        if "adjclose" in name:
+            return "adjclose"
+        if "close" in name:
+            return "close"
+        if "open" in name:
+            return "open"
+        if "high" in name:
+            return "high"
+        if "low" in name:
+            return "low"
+        if "volume" in name:
+            return "volume"
+        return None
 
-    # If still no adjclose but we do have close, treat close as adjclose
+    remap = {}  # original -> base
+    for orig, lc in zip(out.columns, cols_lower):
+        base = base_of(lc)
+        if base and orig not in remap:
+            remap[orig] = base
+
+    # 5) Rename and keep only relevant ones (whatever present)
+    out = out.rename(columns=remap)
+    wanted = ["open", "high", "low", "close", "adjclose", "volume"]
+    present = [c for c in wanted if c in out.columns]
+    out = out[present]
+
+    # 6) If both adjclose & close missing, bail out with debug help
+    if ("adjclose" not in out.columns) and ("close" not in out.columns):
+        # As a last-ditch attempt, try direct title-case names
+        title_map = {"Open": "open", "High": "high", "Low": "low",
+                     "Close": "close", "Adj Close": "adjclose", "Volume": "volume"}
+        found = [c for c in df.columns if c in title_map]
+        if found:
+            tmp = df[found].rename(columns=title_map)
+            out = tmp[[c for c in wanted if c in tmp.columns]]
+        # If still nothing, give a clear error:
+        if out.shape[1] == 0:
+            raise KeyError(
+                f"Neither 'adjclose' nor 'close' present after standardization. "
+                f"Original columns: {list(df.columns)}"
+            )
+
+    # 7) If adjclose missing but close exists -> create adjclose
     if "adjclose" not in out.columns and "close" in out.columns:
         out["adjclose"] = out["close"]
 
-    # Final sanity
-    if "adjclose" not in out.columns and "close" not in out.columns:
-        raise KeyError(
-            f"Neither 'adjclose' nor 'close' present in downloaded data. Columns: {list(out.columns)}"
-        )
+    # 8) Coerce numeric and sort
+    for c in out.columns:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+    out.sort_index(inplace=True)
 
     return out
 
 
 
+
 def _handle_nans(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     mode = (mode or "").lower()
-    if mode in ("ffill_bfill", "ffill+bbill", "ffill+bfill"):
+    if mode in ("ffill_bfill", "ffill+bfill"):
         df = df.ffill().bfill()
     elif mode in ("drop", "dropna"):
         df = df.dropna()
@@ -185,13 +232,15 @@ def load_and_process_data(
     else:
         df = _download_yf(ticker, start_date, end_date, auto_adjust=auto_adjust)
         if cache_path:
+            # write raw download; we’ll still standardize below every time
             df.to_csv(cache_path)
 
-    # 2) Standardize column names
+    # ← ALWAYS standardize, even if it came from cache
     df = _standardize_columns(df)
 
-    # 3) Handle NaNs
+    # Handle NaNs next
     df = _handle_nans(df, nan_mode)
+
 
     # 4) Decide features
     if not feature_columns:

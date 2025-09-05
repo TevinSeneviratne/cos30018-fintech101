@@ -28,6 +28,9 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout, LSTM, InputLayer
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from viz_utils import plot_candles, plot_moving_window_boxplots
+
+
 
 # NEW: our helper for robust loading
 from data_utils import load_and_process_data
@@ -231,6 +234,22 @@ else:
     next_price = float(next_scaled[0, 0])
 
 print(f"Prediction: {next_price}")
+
+
+
+# 1) Candlesticks with n-day candles (e.g., weekly-like 5 trading days per candle)
+# Use raw, unscaled prices for viz (bundle.df has standardized raw columns)
+df_for_viz = bundle.df.copy()
+
+plot_candles(
+    df_for_viz,
+    n=5,                    # 5 trading sessions per candle
+    ma_window=20,           # blue SMA(20) + legend
+    title=f"{COMPANY} – 5-day Candlesticks",
+    volume=True,
+    hover_ma=True           # tooltip on the blue line
+)
+
 
 
 # A few concluding remarks here:

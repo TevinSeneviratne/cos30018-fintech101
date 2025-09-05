@@ -4,6 +4,9 @@ matplotlib
 scikit-learn
 pandas-datareader
 yfinance
+mplfinance
+mplcursors>=0.5
+
 
 # Windows/Linux (or any non-Apple-Silicon): use standard TensorFlow
 tensorflow; platform_system != "Darwin" or platform_machine != "arm64"
