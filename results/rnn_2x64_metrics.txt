@@ -1,0 +1,9 @@
+run_name: rnn_2x64
+epochs: 15
+batch_size: 32
+mae: 1.063827785835447
+rmse: 1.4185579440461284
+mape: 1.2071042655920885
+best_ckpt: results/rnn_2x64.weights.h5
+final_loss: 0.003181515960022807
+val_loss: 0.0013425636570900679

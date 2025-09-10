@@ -5,7 +5,7 @@ scikit-learn
 pandas-datareader
 yfinance
 mplfinance
-mplcursors>=0.5
+mplcursors
 
 
 # Windows/Linux (or any non-Apple-Silicon): use standard TensorFlow

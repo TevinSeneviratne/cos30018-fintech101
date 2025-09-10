@@ -1,0 +1,9 @@
+run_name: taskc4_lstm_2x50
+epochs: 10
+batch_size: 128
+mae: 2.011993050144898
+rmse: 2.460580553643137
+mape: 2.1867768223504194
+best_ckpt: results/taskc4_lstm_2x50.weights.h5
+final_loss: 0.006483111064881086
+val_loss: 0.008314430713653564

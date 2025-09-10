@@ -1,0 +1,2 @@
+run_name,mae,rmse,mape,epochs,batch_size,best_ckpt,final_loss,val_loss,pred_plot
+gru_2x64,1.096260954584072,1.4558734395531887,1.2388324314740498,25,32,results/gru_2x64.weights.h5,0.0008416073978878558,0.0014334677252918482,
