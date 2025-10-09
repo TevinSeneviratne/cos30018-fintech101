@@ -1,11 +1,12 @@
 numpy
 pandas
 matplotlib
-scikit-learn
 pandas-datareader
 yfinance
 mplfinance
 mplcursors
+statsmodels>=0.13
+scikit-learn>=1.0
 
 
 # Windows/Linux (or any non-Apple-Silicon): use standard TensorFlow
