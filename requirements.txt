@@ -1,19 +1,30 @@
-numpy
-pandas
-matplotlib
-pandas-datareader
-yfinance
-mplfinance
-mplcursors
+# --- Core scientific stack ---
+numpy>=1.26
+pandas>=2.2
+matplotlib>=3.9
+
+# --- Financial data sources ---
+pandas-datareader>=0.10
+yfinance>=0.2
+yahoo_fin>=0.8
+requests_html>=0.10
+
+# --- Visualization utilities ---
+mplfinance>=0.12
+mplcursors>=0.5
+
+# --- Statistical / Time-Series modelling ---
 statsmodels>=0.13
-scikit-learn>=1.0
 
+# --- Machine Learning & Deep Learning ---
+scikit-learn>=1.5
+torch>=2.1
+transformers>=4.40
 
-# Windows/Linux (or any non-Apple-Silicon): use standard TensorFlow
+# --- Platform-specific TensorFlow builds ---
+# Windows/Linux: standard TensorFlow
 tensorflow; platform_system != "Darwin" or platform_machine != "arm64"
 
-# Apple Silicon (M1/M2/M3 on macOS): use Metal-accelerated TensorFlow
+# Apple Silicon (M1/M2/M3): Metal-accelerated TensorFlow
 tensorflow-macos; platform_system == "Darwin" and platform_machine == "arm64"
 tensorflow-metal; platform_system == "Darwin" and platform_machine == "arm64"
-yahoo_fin
-requests_html
