@@ -1,4 +1,4 @@
-# COS30018 – FinTech101 (Option C) – Task C.1
+# FinTech101 - Stock Price Prediction System
 
 This repo contains:
 - `stock_prediction.py` (v0.1 baseline)
